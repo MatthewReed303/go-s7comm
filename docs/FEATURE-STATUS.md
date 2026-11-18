@@ -44,7 +44,8 @@ The module is pure Go; go-cotp and go-tpkt are its only dependencies, apart from
 | Bit read and write | `ReadBit`, `WriteBit`, `ReadDBBit`, `WriteDBBit` | ✅ | yes | yes, on DBs (`ReadBit`, `WriteBit`) |
 | Rejected read and write | `ReadResult.Status`, `S7Error`, `ParseWriteVarResponse` | ✅ | yes | yes, item codes `0x05` and `0x0A`; recorded: `0x03` and `0x0A` of a CPU 315-2 PN/DP, `0x03` of a CPU 1214C for a write-protected DB ([ERRORS.md](../ERRORS.md#refused-access-item-codes-and-header-errors)) |
 | Multi-PDU read and write chunking | `ReadArea`, `WriteArea` | ✅ | chunk planning unit test only | no |
-| Timer and counter areas | `model.AreaTimer`, `model.AreaCounter` | ◐ area codes defined; no client test uses them | no | no |
+| Multi-item read and write (several items per Read Var / Write Var) | `ReadMulti`, `WriteMulti` | ✅ | yes (`server`) | no |
+| Timer and counter areas | `model.AreaTimer`, `model.AreaCounter` with `ReadArea`, `WriteArea`, `ReadMulti`, `WriteMulti` | ✅ by element, transport TIMER/COUNTER | yes (`server`: reads, refused writes) | no |
 | CPU identification | `Identify` | ✅ | yes | recorded: CPU 315-2 PN/DP, IM151-8 PN/DP CPU |
 | CPU state, protection level | `GetCPUState`, `GetProtectionLevel` | ✅ | yes | recorded: CPU 315-2 PN/DP, IM151-8 PN/DP CPU (state) |
 | Diagnostic buffer | `ReadDiagBuffer`, `ReadDiagBufferRaw` | ✅ | yes | recorded: CPU 315-2 PN/DP, IM151-8 PN/DP CPU |

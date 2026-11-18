@@ -1,5 +1,33 @@
 # go-s7comm Releases
 
+## v0.18.0
+
+**Date:** 2026-11-19
+**Previous release:** v0.17.1
+
+Minor release. Two client operations, one type and four `wire` identifiers are added; no exported identifier is removed or changed. One behaviour changes, under "Breaking".
+
+### Added
+
+- **`Client.ReadMulti`** reads several areas, packing as many as fit the negotiated PDU into one Read Var request; an area too large for one answer is read alone, chunked as `ReadArea` reads it. One `*ReadResult` per address.
+- **`Client.WriteMulti`** and **`WriteItem`** write several areas, packing as many as fit the PDU into one Write Var request. One error per item: nil, or the item's return code.
+- `wire.EncodeWriteVarItemsRequest` (`wire.WriteVarItem`), `wire.WriteVarItemSize`, `wire.IsElementArea` and `wire.ElementAreaBytes`.
+
+### Breaking
+
+- **Timers and counters are addressed by element.** On `model.AreaTimer` and `model.AreaCounter`, `ReadArea` and `WriteArea` send transport size TIMER (`0x1D`) or COUNTER (`0x1C`) with `Start` as the first element's number and `Size` as the element count (two bytes each); a Write Var item there carries an OCTET STRING. Before, they sent BYTE with a byte offset, which CPUs refuse on these areas (the recorded WinCC and Snap7 traffic, and package `server`, use TIMER and COUNTER). Who notices: a caller that read timers or counters by byte offset; such reads were refused by CPUs.
+
+### Documentation
+
+- API.md (read/write notes, `wire` listing), LIMITATIONS.md, docs/FEATURE-STATUS.md (timer and counter areas, multi-item rows).
+
+### Tests
+
+- `client/multi_test.go` against package `server`: timers and counters by element (read, refused write, odd length), `ReadMulti` (areas mixed, refused items, an area larger than the PDU, sixty items in one request, ended context, closed client, rate limit), `WriteMulti` (packing, refused items, an item larger than the PDU, ended context, closed client).
+- `wire/multi_test.go`: S7ANY items of timers and counters, `EncodeWriteVarItemsRequest` decoded by `ParseWriteVarRequest`, its limits.
+
+---
+
 ## v0.17.1
 
 **Date:** 2026-11-16

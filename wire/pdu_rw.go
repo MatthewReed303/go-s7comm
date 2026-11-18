@@ -224,6 +224,9 @@ func putS7Any(transport byte, count, dbNumber uint16, area byte, startBit uint32
 // EncodeS7Any encodes an S7Any address specification (syntax SyntaxIDS7Any only).
 // Call ValidateArea(addr.Area) before encoding if area comes from untrusted input.
 // Byte-oriented: Start is a byte offset; Size is a byte count; transport size is BYTE.
+// On the timer and counter areas Start is the first element's number and Size
+// the number of elements (two bytes each), with transport size TIMER or COUNTER:
+// a CPU refuses BYTE there.
 // A field that does not fit returns ErrOutOfRange (ValidateS7AnyAddress).
 func EncodeS7Any(addr S7AnyAddress) ([]byte, error) {
 	if addr.DBNumber < 0 || addr.DBNumber > MaxS7AnyDBNumber {
@@ -235,8 +238,19 @@ func EncodeS7Any(addr S7AnyAddress) ([]byte, error) {
 	if addr.Size < 0 || addr.Size > MaxS7AnyCount {
 		return nil, fmt.Errorf("%w: size %d not in 0..%d", ErrOutOfRange, addr.Size, MaxS7AnyCount)
 	}
+	if IsElementArea(addr.Area) {
+		return putS7Any(addr.Area, uint16(addr.Size), uint16(addr.DBNumber), addr.Area, uint32(addr.Start)), nil
+	}
 	return putS7Any(TransportSizeByte, uint16(addr.Size), uint16(addr.DBNumber), addr.Area, uint32(addr.Start)<<3), nil
 }
+
+// IsElementArea reports whether an area is addressed by element, not by byte:
+// the timers and the counters. Their transport size is the area code itself
+// (TIMER 0x1D, COUNTER 0x1C); one element is ElementAreaBytes bytes.
+func IsElementArea(area byte) bool { return area == AreaTimer || area == AreaCounter }
+
+// ElementAreaBytes is the size of one timer or counter.
+const ElementAreaBytes = 2
 
 // S7AnyBitAddress is a single-bit S7ANY address. BitOffset must be 0..7.
 type S7AnyBitAddress struct {
@@ -464,25 +478,55 @@ func ParseReadVarResponse(param, data []byte) ([]ReadVarItem, error) {
 // EncodeWriteVarRequest creates a write variable request. A value longer than
 // MaxWriteVarBytes, or an address ValidateS7AnyAddress rejects, returns ErrOutOfRange.
 func EncodeWriteVarRequest(pduRef uint16, addr S7AnyAddress, value []byte) ([]byte, error) {
-	bits := len(value) * 8
-	if bits > math.MaxUint16 {
-		return nil, fmt.Errorf("%w: write of %d bytes, at most %d", ErrOutOfRange, len(value), MaxWriteVarBytes)
-	}
-	item, err := EncodeS7Any(addr)
-	if err != nil {
-		return nil, err
-	}
-	param := append([]byte{FuncWriteVar, 1}, item...) // one item
+	return EncodeWriteVarItemsRequest(pduRef, []WriteVarItem{{Addr: addr, Value: value}})
+}
 
-	// Data
-	data := make([]byte, 4, 4+len(value)+1)
-	data[0] = RetCodeSuccess                            // Return code (reserved)
-	data[1] = 0x04                                      // Transport size (byte/word/dword)
-	binary.BigEndian.PutUint16(data[2:4], uint16(bits)) // Length in bits
-	data = append(data, value...)
-	// Pad to even length
-	if len(data)%2 != 0 {
-		data = append(data, 0x00)
+// WriteVarItem is one item of a Write Var request: where, and the bytes to write
+// there (two per element on the timer and counter areas).
+type WriteVarItem struct {
+	Addr  S7AnyAddress
+	Value []byte
+}
+
+// WriteVarItemSize is at most what one item adds to a Write Var request: its
+// 12-byte address, its 4-byte data header and its value with its pad byte.
+func WriteVarItemSize(valueLen int) int { return 12 + 4 + valueLen + valueLen%2 }
+
+// EncodeWriteVarItemsRequest creates one Write Var request for several items.
+// Each value is sent as BYTE/WORD/DWORD data with its length in bits, or on the
+// timer and counter areas as an OCTET STRING with its length in bytes. Every
+// value but the last is padded to an even length. No items, more than
+// MaxReadVarItems, a value longer than MaxWriteVarBytes or an address
+// ValidateS7AnyAddress rejects returns ErrOutOfRange.
+func EncodeWriteVarItemsRequest(pduRef uint16, items []WriteVarItem) ([]byte, error) {
+	n := len(items)
+	if n == 0 || n > MaxReadVarItems {
+		return nil, fmt.Errorf("%w: %d items, 1 to %d", ErrOutOfRange, n, MaxReadVarItems)
+	}
+	param := make([]byte, 2, 2+12*n)
+	param[0] = FuncWriteVar
+	param[1] = byte(n)
+	var data []byte
+	for i, it := range items {
+		bits := len(it.Value) * 8
+		if bits > math.MaxUint16 {
+			return nil, fmt.Errorf("%w: write of %d bytes, at most %d", ErrOutOfRange, len(it.Value), MaxWriteVarBytes)
+		}
+		spec, err := EncodeS7Any(it.Addr)
+		if err != nil {
+			return nil, err
+		}
+		param = append(param, spec...)
+		head := []byte{RetCodeSuccess, DataTransportSizeByte, 0, 0}
+		binary.BigEndian.PutUint16(head[2:4], uint16(bits))
+		if IsElementArea(it.Addr.Area) {
+			head[1] = DataTransportSizeOctet
+			binary.BigEndian.PutUint16(head[2:4], uint16(len(it.Value)))
+		}
+		data = append(append(data, head...), it.Value...)
+		if len(it.Value)%2 != 0 && (i < n-1 || n == 1) {
+			data = append(data, 0x00)
+		}
 	}
 	return encodeMessage(ROSCTRJob, pduRef, param, data)
 }

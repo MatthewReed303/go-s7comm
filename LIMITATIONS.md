@@ -7,7 +7,7 @@ What go-s7comm does not do, or does only partly. API behaviour is in [API.md](AP
 - **Classic S7comm only**, with no TLS and no password handling ([SECURITY.md](SECURITY.md)).
 - **The server is for tests**: package `server` answers only Setup Communication, Read Var and Write Var on DBs, inputs, outputs, markers, timers and counters, and DBREAD items (read only). It has no PLC program (timers and counters do not run), SZL, blocks, clock, access protection or password; those requests get error `0x8104` (service not implemented).
 - **DBREAD with a refused range**: the recordings hold only successful ranges, so how a CPU marks one refused range is not known; the server refuses the whole item.
-- **Timer and counter addresses**: the server reads the S7ANY address of a timer or counter as its element number. The recordings address only T0 and C0, which cannot tell a number from another reading; Snap7's server uses another mapping (`Start >> 1`).
+- **Timer and counter addresses**: the client sends and the server reads the S7ANY address of a timer or counter as its element number. The recordings address only T0 and C0, which cannot tell a number from another reading; Snap7's server uses another mapping (`Start >> 1`).
 - **Block download and PLC start/stop**: `wire` names these function codes, but `client` has no operation for them. Blocks can be listed, inspected and uploaded.
 - **`Discover`** is IPv4 only and rejects ranges larger than `/12`.
 

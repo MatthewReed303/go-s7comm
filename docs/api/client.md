@@ -259,7 +259,7 @@ ProbeReadableRanges scans the area in the configured range and consolidates adja
 func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult, error)
 ```
 
-ReadArea reads data from an S7 memory area and returns a structured result with status and lengths. Use result.OK() for success; result.Err() for a non-success outcome; result.Data for the payload. Invalid address (negative start/size, negative DB number for DB area) returns an error.
+ReadArea reads data from an S7 memory area and returns a structured result with status and lengths. Use result.OK() for success; result.Err() for a non-success outcome; result.Data for the payload. Invalid address (negative start/size, negative DB number for DB area) returns an error. On the timer and counter areas Start and Size count elements, not bytes: Data holds two bytes per timer or counter.
 
 #### func (Client) ReadBit
 
@@ -317,6 +317,14 @@ func (c *Client) ReadMerkers(ctx context.Context, offset, size int) (*ReadResult
 
 ReadMerkers reads from the merker area. Returns \*ReadResult; use result.OK() and result.Data.
 
+#### func (Client) ReadMulti
+
+```go
+func (c *Client) ReadMulti(ctx context.Context, addrs []model.Address) ([]*ReadResult, error)
+```
+
+ReadMulti reads several areas, packing as many as fit the negotiated PDU into one Read Var request: the request holds 12 bytes per item, the answer 4 bytes and the data of each, padded to an even length. An area whose answer does not fit one PDU is read alone, chunked as ReadArea reads it; one of size zero is not sent. It returns one result per address, in order, each as ReadArea returns it (timers and counters are addressed by element). An invalid address returns an error and reads nothing. A transport failure or the end of ctx fails the result of every address not read yet.
+
 #### func (Client) ReadOutputs
 
 ```go
@@ -339,7 +347,7 @@ UploadBlock uploads a block from the PLC. Block numbers must be in 0..65535. An 
 func (c *Client) WriteArea(ctx context.Context, addr model.Address, data []byte) error
 ```
 
-WriteArea writes data to an S7 memory area. The number of bytes written is len(data); addr.Size is ignored. Large payloads are chunked to fit the negotiated PDU size. Invalid address (negative start, negative DB number for DB area) returns an error.
+WriteArea writes data to an S7 memory area. The number of bytes written is len(data); addr.Size is ignored. Large payloads are chunked to fit the negotiated PDU size. Invalid address (negative start, negative DB number for DB area) returns an error. On the timer and counter areas Start is the first element's number and data holds two bytes per element; an odd length returns a ValidationError.
 
 #### func (Client) WriteBit
 
@@ -364,6 +372,14 @@ func (c *Client) WriteDBBit(ctx context.Context, dbNumber, byteOffset, bitOffset
 ```
 
 WriteDBBit writes DBNumber.DBXByteOffset.BitOffset using native BIT transport.
+
+#### func (Client) WriteMulti
+
+```go
+func (c *Client) WriteMulti(ctx context.Context, items []WriteItem) ([]error, error)
+```
+
+WriteMulti writes several areas, packing as many items as fit the negotiated PDU into one Write Var request. An item too large for one request is written alone, chunked as WriteArea writes it; one with no data is not sent. It returns one error per item, in order: nil when written, the item's return code as an error (ReturnCodeError) when the PLC refused it. An invalid item returns an error and writes nothing. A transport failure or the end of ctx returns that error, and every item not written yet carries it too.
 
 ### type CompareReadCandidate
 
@@ -1061,3 +1077,14 @@ ValidationError indicates invalid caller input (e.g. negative start/size, invali
 ```go
 func (e *ValidationError) Error() string
 ```
+
+### type WriteItem
+
+```go
+type WriteItem struct {
+	Addr model.Address
+	Data []byte
+}
+```
+
+WriteItem is one area and the bytes to write there, for WriteMulti (two bytes per element on the timer and counter areas).

@@ -65,6 +65,8 @@ func newFailedReadResult(requested int, err error) *ReadResult {
 // ReadArea reads data from an S7 memory area and returns a structured result with status and lengths.
 // Use result.OK() for success; result.Err() for a non-success outcome; result.Data for the payload.
 // Invalid address (negative start/size, negative DB number for DB area) returns an error.
+// On the timer and counter areas Start and Size count elements, not bytes: Data
+// holds two bytes per timer or counter.
 func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult, error) {
 	if err := validateAddress(addr); err != nil {
 		return nil, err
@@ -73,42 +75,61 @@ func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult,
 		return nil, err
 	}
 	if err := c.beginCall(ctx); err != nil {
-		return newFailedReadResult(max(addr.Size, 0), err), nil
+		return newFailedReadResult(max(addr.Size, 0)*unitBytes(addr.Area), err), nil
 	}
 	defer c.endCall()
 
-	reqLen := max(addr.Size, 0)
+	c.mu.RLock()
+	pduSize := c.pduSize
+	rateLimit := c.opts.rateLimit
+	c.mu.RUnlock()
+	res, _, err := c.readArea(ctx, addr, pduSize, rateLimit, true)
+	return res, err
+}
+
+// unitBytes is the size of one addressed unit of an area: a byte, or a timer
+// or counter.
+func unitBytes(area model.Area) int {
+	if wire.IsElementArea(byte(area)) {
+		return wire.ElementAreaBytes
+	}
+	return 1
+}
+
+// readArea is ReadArea for a caller that holds the turn; first is whether no
+// request of the call went before (no rate-limit pause). The bool reports
+// whether it sent a request.
+func (c *Client) readArea(ctx context.Context, addr model.Address, pduSize int, rateLimit time.Duration, first bool) (*ReadResult, bool, error) {
+	unit := unitBytes(addr.Area)
+	reqLen := max(addr.Size, 0) * unit
 	out := &ReadResult{
 		RequestedLength: reqLen,
 		ReturnedLength:  0,
 		Data:            nil,
 	}
 
-	c.mu.RLock()
-	pduSize := c.pduSize
-	rateLimit := c.opts.rateLimit
-	c.mu.RUnlock()
-
 	maxData := pduSize - wire.ReadVarRequestOverhead
 	if maxData < 1 {
 		maxData = 200
 	}
 
-	result := make([]byte, 0, addr.Size)
+	result := make([]byte, 0, reqLen)
 	offset := addr.Start
-	chunks := planReadChunks(addr.Size, maxData)
-	firstChunk := true
+	chunks := planReadChunks(addr.Size, max(maxData/unit, 1))
+	firstChunk := first
+	sent := false
 
 	for _, chunkSize := range chunks {
 		if err := ctx.Err(); err != nil {
-			return newFailedReadResult(reqLen, err), nil
+			return newFailedReadResult(reqLen, err), sent, nil
 		}
 		if rateLimit > 0 && !firstChunk {
 			if err := c.ratePause(ctx, rateLimit); err != nil {
-				return newFailedReadResult(reqLen, err), nil
+				return newFailedReadResult(reqLen, err), sent, nil
 			}
 		}
 		firstChunk = false
+		sent = true
 
 		s7Addr := wire.S7AnyAddress{
 			Area:     byte(addr.Area),
@@ -120,11 +141,11 @@ func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult,
 		ref := c.nextPDURef()
 		req, err := wire.EncodeReadVarRequest(ref, []wire.S7AnyAddress{s7Addr})
 		if err != nil {
-			return nil, &ValidationError{Message: err.Error()}
+			return nil, sent, &ValidationError{Message: err.Error()}
 		}
 		param, data, err := c.sendReceive(ctx, req, ref)
 		if err != nil {
-			return newFailedReadResult(reqLen, err), nil
+			return newFailedReadResult(reqLen, err), sent, nil
 		}
 
 		items, err := wire.ParseReadVarResponse(param, data)
@@ -133,7 +154,7 @@ func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult,
 			out.Message = err.Error()
 			out.ReturnedLength = len(result)
 			out.Data = result
-			return out, nil
+			return out, sent, nil
 		}
 
 		if len(items) == 0 {
@@ -141,7 +162,7 @@ func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult,
 			out.Message = "no data returned"
 			out.ReturnedLength = len(result)
 			out.Data = result
-			return out, nil
+			return out, sent, nil
 		}
 
 		item := items[0]
@@ -152,36 +173,40 @@ func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult,
 			out.ItemStatus = wire.ItemReturnCodeString(item.ReturnCode)
 			out.ReturnedLength = len(result)
 			out.Data = result
-			return out, nil
+			return out, sent, nil
 		}
 
-		if len(item.Data) > chunkSize {
-			// More than asked: appending it would move every later byte off its address.
+		want := chunkSize * unit
+		if len(item.Data) > want {
 			out.Status = ReadStatusProtocolErr
-			out.Message = fmt.Sprintf("item returned %d bytes for %d requested", len(item.Data), chunkSize)
+			out.Message = fmt.Sprintf("item returned %d bytes for %d requested", len(item.Data), want)
 			out.Cause = fmt.Errorf("%s: %w", out.Message, ErrProtocolFailure)
 			out.ReturnedLength = len(result)
 			out.Data = result
-			return out, nil
+			return out, sent, nil
 		}
 		result = append(result, item.Data...)
-		if len(item.Data) < chunkSize {
-			// Fewer bytes than asked: later chunks would land at the wrong offsets.
+		if len(item.Data) < want {
 			break
 		}
 		offset += chunkSize
 	}
 
+	finishRead(out, result)
+	return out, sent, nil
+}
+
+// finishRead sets a read's data, length and status from what it returned.
+func finishRead(out *ReadResult, result []byte) {
 	out.ReturnedLength = len(result)
 	out.Data = result
-	out.Status = ClassifyReadOutcome(reqLen, out.ReturnedLength)
+	out.Status = ClassifyReadOutcome(out.RequestedLength, out.ReturnedLength)
 	if out.Status == ReadStatusEmptyRead && out.Message == "" {
 		out.Message = "target returned no data for requested range"
 	}
 	if out.Status == ReadStatusShortRead && out.Message == "" {
-		out.Message = fmt.Sprintf("short read: requested %d, got %d", reqLen, out.ReturnedLength)
+		out.Message = fmt.Sprintf("short read: requested %d, got %d", out.RequestedLength, out.ReturnedLength)
 	}
-	return out, nil
 }
 
 // ratePause waits d, the pause of WithRateLimit before the next chunk, in the
@@ -234,11 +259,17 @@ func ClassifyReadOutcome(requested, returned int) ReadStatus {
 
 // WriteArea writes data to an S7 memory area. The number of bytes written is len(data); addr.Size is ignored.
 // Large payloads are chunked to fit the negotiated PDU size. Invalid address (negative start, negative DB number for DB area) returns an error.
+// On the timer and counter areas Start is the first element's number and data
+// holds two bytes per element; an odd length returns a ValidationError.
 func (c *Client) WriteArea(ctx context.Context, addr model.Address, data []byte) error {
 	if err := validateAddress(addr); err != nil {
 		return err
 	}
-	if err := validateRangeEnd(addr.Start, len(data)); err != nil {
+	unit := unitBytes(addr.Area)
+	if len(data)%unit != 0 {
+		return &ValidationError{Message: fmt.Sprintf("%d bytes for %s: two per timer or counter", len(data), addr.Area)}
+	}
+	if err := validateRangeEnd(addr.Start, len(data)/unit); err != nil {
 		return err
 	}
 	if err := c.beginCall(ctx); err != nil {
@@ -253,17 +284,19 @@ func (c *Client) WriteArea(ctx context.Context, addr model.Address, data []byte)
 	pduSize := c.pduSize
 	rateLimit := c.opts.rateLimit
 	c.mu.RUnlock()
+	return c.writeArea(ctx, addr, data, pduSize, rateLimit, true)
+}
 
-	// An even number of bytes per chunk: the encoder pads an odd payload by
-	// one byte, which would make a full chunk one byte longer than an odd
-	// PDU size allows.
+// writeArea is WriteArea for a caller that holds the turn and checked the address.
+func (c *Client) writeArea(ctx context.Context, addr model.Address, data []byte, pduSize int, rateLimit time.Duration, first bool) error {
+	unit := unitBytes(addr.Area)
 	maxPayload := (pduSize - wire.WriteVarRequestOverhead) &^ 1
 	if maxPayload < 1 {
 		maxPayload = 200
 	}
-	chunks := planReadChunks(len(data), maxPayload)
+	chunks := planReadChunks(len(data)/unit, max(maxPayload/unit, 1))
 	offset := 0
-	firstChunk := true
+	firstChunk := first
 	for _, chunkSize := range chunks {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -274,12 +307,12 @@ func (c *Client) WriteArea(ctx context.Context, addr model.Address, data []byte)
 			}
 		}
 		firstChunk = false
-		chunk := data[offset : offset+chunkSize]
+		chunk := data[offset*unit : (offset+chunkSize)*unit]
 		s7Addr := wire.S7AnyAddress{
 			Area:     byte(addr.Area),
 			DBNumber: addr.DBNumber,
 			Start:    addr.Start + offset,
-			Size:     len(chunk),
+			Size:     chunkSize,
 		}
 		ref := c.nextPDURef()
 		req, err := wire.EncodeWriteVarRequest(ref, s7Addr, chunk)
