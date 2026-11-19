@@ -64,10 +64,7 @@ func (c *Client) ReadMulti(ctx context.Context, addrs []model.Address) ([]*ReadR
 	first := true
 	for _, g := range planReadGroups(addrs, pduSize) {
 		if len(g) == 1 && readItemAnswer(addrs[g[0]].Size*unitBytes(addrs[g[0]].Area)) > maxReadAnswer(pduSize) {
-			res, sent, err := c.readArea(ctx, addrs[g[0]], pduSize, rateLimit, first)
-			if err != nil {
-				return nil, err
-			}
+			res, sent := c.readArea(ctx, addrs[g[0]], pduSize, rateLimit, first)
 			first = first && !sent
 			out[g[0]] = res
 			if res.Cause != nil && res.Status != ReadStatusProtocolErr {
@@ -318,14 +315,10 @@ func (c *Client) writeGroup(ctx context.Context, items []WriteItem, g []int, out
 	return nil
 }
 
-// protocolFailure wraps an answer that does not parse with ErrProtocolFailure;
-// a refusal in the answer's header (*wire.S7Error) is returned as it is.
-func protocolFailure(err error) error {
-	if isRefusal(err) {
-		return err
-	}
-	return fmt.Errorf("%w: %w", err, ErrProtocolFailure)
-}
+// protocolFailure wraps an answer that does not parse with ErrProtocolFailure.
+// (A refusal in the answer's header is an error of the exchange itself and
+// never reaches the parser.)
+func protocolFailure(err error) error { return fmt.Errorf("%w: %w", err, ErrProtocolFailure) }
 
 // isRefusal reports whether a write failed because the PLC refused it: an item
 // return code or an error class in its answer. The session goes on. An

@@ -62,11 +62,11 @@ func (m *multiPeer) requests() []int {
 }
 
 // multiClient connects a client to m over in-memory pipes (PDU size 480).
-func multiClient(t *testing.T, m *multiPeer) *Client {
+func multiClient(t *testing.T, m *multiPeer, opts ...Option) *Client {
 	t.Helper()
 	peers := &pipePeers{op: m.op}
 	t.Cleanup(peers.wait)
-	return pipeClient(t, peers)
+	return pipeClient(t, peers, opts...)
 }
 
 // specBytes is the number of bytes a Read Var item asks for: two per timer or
