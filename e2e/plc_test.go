@@ -186,42 +186,83 @@ func (p *plc) memory(it item) ([]byte, byte) {
 	return mem, wire.RetCodeSuccess
 }
 
+// read answers a Read Var job of one or more items: each item's answer,
+// every one but the last padded to an even length.
 func (p *plc) read(ref uint16, param []byte) []byte {
-	it := decodeItem(param[2:14])
+	n := int(param[1])
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	var out []byte
+	for i := range n {
+		if len(out)%2 != 0 {
+			out = append(out, 0x00)
+		}
+		out = append(out, p.readItem(decodeItem(param[2+12*i:14+12*i]))...)
+	}
+	return ack(ref, param[:2], out)
+}
+
+// readItem is one item of a Read Var answer. The caller holds p.mu.
+func (p *plc) readItem(it item) []byte {
 	mem, code := p.memory(it)
 	if code != wire.RetCodeSuccess {
-		return ack(ref, param[:2], []byte{code, 0x00, 0x00, 0x00})
+		return []byte{code, 0x00, 0x00, 0x00}
 	}
 	if it.bit {
 		v := mem[it.startBit/8] >> (it.startBit % 8) & 1
-		return ack(ref, param[:2], []byte{wire.RetCodeSuccess, wire.DataTransportSizeBit, 0x00, 0x01, v, 0x00})
+		return []byte{wire.RetCodeSuccess, wire.DataTransportSizeBit, 0x00, 0x01, v, 0x00}
 	}
 	start := it.startBit / 8
 	out := make([]byte, 4, 4+it.count)
 	out[0], out[1] = wire.RetCodeSuccess, wire.DataTransportSizeByte
 	binary.BigEndian.PutUint16(out[2:4], uint16(it.count*8))
-	return ack(ref, param[:2], append(out, mem[start:start+it.count]...))
+	return append(out, mem[start:start+it.count]...)
 }
 
+// write answers a Write Var job of one or more items with one return code
+// each. The data section holds per item a 4-byte header and the value, every
+// value but the last padded to an even length.
 func (p *plc) write(ref uint16, param, data []byte) []byte {
-	it := decodeItem(param[2:14])
+	n := int(param[1])
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	mem, code := p.memory(it)
-	if code == wire.RetCodeSuccess {
-		if it.bit {
-			mask := byte(1) << (it.startBit % 8)
-			mem[it.startBit/8] &^= mask
-			if data[4] != 0 {
-				mem[it.startBit/8] |= mask
-			}
-		} else {
-			copy(mem[it.startBit/8:], data[4:4+it.count])
+	codes := make([]byte, n)
+	off := 0
+	for i := range n {
+		it := decodeItem(param[2+12*i : 14+12*i])
+		size := int(binary.BigEndian.Uint16(data[off+2 : off+4]))
+		switch data[off+1] {
+		case wire.DataTransportSizeBit:
+			size = 1
+		case wire.DataTransportSizeByte:
+			size = (size + 7) / 8
 		}
+		val := data[off+4 : off+4+size]
+		off += 4 + size
+		if i < n-1 && size%2 != 0 {
+			off++
+		}
+		codes[i] = p.writeItem(it, val)
 	}
-	return ack(ref, param[:2], []byte{code})
+	return ack(ref, param[:2], codes)
+}
+
+// writeItem applies one Write Var item. The caller holds p.mu.
+func (p *plc) writeItem(it item, val []byte) byte {
+	mem, code := p.memory(it)
+	if code != wire.RetCodeSuccess {
+		return code
+	}
+	if it.bit {
+		mask := byte(1) << (it.startBit % 8)
+		mem[it.startBit/8] &^= mask
+		if val[0] != 0 {
+			mem[it.startBit/8] |= mask
+		}
+		return code
+	}
+	copy(mem[it.startBit/8:], val[:it.count])
+	return code
 }
 
 // szl answers an SZL read with the mode list (0x0424) as an S7-300 sends

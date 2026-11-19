@@ -9,21 +9,24 @@ Minor release. Two client operations, one type and four `wire` identifiers are a
 
 ### Added
 
-- **`Client.ReadMulti`** reads several areas, packing as many as fit the negotiated PDU into one Read Var request; an area too large for one answer is read alone, chunked as `ReadArea` reads it. One `*ReadResult` per address.
-- **`Client.WriteMulti`** and **`WriteItem`** write several areas, packing as many as fit the PDU into one Write Var request. One error per item: nil, or the item's return code.
+- **`Client.ReadMulti`** reads several areas, packing as many as fit the negotiated PDU, at most 20, into one Read Var request; an area too large for one answer is read alone, chunked as `ReadArea` reads it. One `*ReadResult` per address, never nil. Contributed by @MatthewReed303 ([#41](https://github.com/otfabric/go-s7comm/pull/41)).
+- **`Client.WriteMulti`** and **`WriteItem`** write several areas, packing as many as fit the PDU, at most 20, into one Write Var request. One error per item: nil, or the item's return code; an answer that does not match its request wraps `ErrProtocolFailure`. Contributed by @MatthewReed303 ([#41](https://github.com/otfabric/go-s7comm/pull/41)).
 - `wire.EncodeWriteVarItemsRequest` (`wire.WriteVarItem`), `wire.WriteVarItemSize`, `wire.IsElementArea` and `wire.ElementAreaBytes`.
 
 ### Breaking
 
-- **Timers and counters are addressed by element.** On `model.AreaTimer` and `model.AreaCounter`, `ReadArea` and `WriteArea` send transport size TIMER (`0x1D`) or COUNTER (`0x1C`) with `Start` as the first element's number and `Size` as the element count (two bytes each); a Write Var item there carries an OCTET STRING. Before, they sent BYTE with a byte offset, which CPUs refuse on these areas (the recorded WinCC and Snap7 traffic, and package `server`, use TIMER and COUNTER). Who notices: a caller that read timers or counters by byte offset; such reads were refused by CPUs.
+- **Timers and counters are addressed by element.** On `model.AreaTimer` and `model.AreaCounter`, `ReadArea` and `WriteArea` send transport size TIMER (`0x1D`) or COUNTER (`0x1C`) with `Start` as the first element's number and `Size` as the element count (two bytes each); a Write Var item there carries an OCTET STRING. Before, they sent BYTE with a byte offset, which CPUs refuse on these areas (the recorded WinCC and Snap7 traffic, and package `server`, use TIMER and COUNTER). Who notices: a caller that read timers or counters by byte offset; such reads were refused by CPUs. Contributed by @MatthewReed303 ([#41](https://github.com/otfabric/go-s7comm/pull/41)).
 
 ### Documentation
 
-- API.md (read/write notes, `wire` listing), LIMITATIONS.md, docs/FEATURE-STATUS.md (timer and counter areas, multi-item rows).
+- API.md (read/write notes, `wire` listing), ERRORS.md (outcome model of `ReadMulti` and `WriteMulti`), LIMITATIONS.md (20 items per request), TESTING.md (row L3, e2e and unit tiers), docs/FEATURE-STATUS.md (v0.18.x, timer and counter areas, multi-item rows).
 
 ### Tests
 
-- `client/multi_test.go` against package `server`: timers and counters by element (read, refused write, odd length), `ReadMulti` (areas mixed, refused items, an area larger than the PDU, sixty items in one request, ended context, closed client, rate limit), `WriteMulti` (packing, refused items, an item larger than the PDU, ended context, closed client).
+- `client/multi_test.go` against package `server`: timers and counters by element (read, refused write, odd length), `ReadMulti` (areas mixed, refused items, an area larger than the PDU, sixty items over three requests, ended context, closed client, rate limit), `WriteMulti` (packing, refused items, an item larger than the PDU, ended context, closed client).
+- `client/multi_answers_test.go`: at most 20 items per request (45 items go as 20, 20 and 5), answers that do not match their request (another item count, an item longer or shorter than asked, an answer that does not parse), a job refused in the answer's header, a transport failure in a group and in a chunked area, no nil result for an address of size zero.
+- `ReadMulti` and `WriteMulti` join the lifecycle tests of `client/session_test.go` and `client/request_timeout_test.go`: `Close` ends them in flight and in a pause of `WithRateLimit`, a context that ends in the pause, the request timeout.
+- `e2e/multi_test.go`: write then read back with `WriteMulti` and `ReadMulti`; 300 multi-item calls with every answer corrupted. The simulated PLC of `e2e/` answers jobs of several items.
 - `wire/multi_test.go`: S7ANY items of timers and counters, `EncodeWriteVarItemsRequest` decoded by `ParseWriteVarRequest`, its limits.
 
 ---

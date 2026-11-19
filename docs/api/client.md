@@ -323,7 +323,7 @@ ReadMerkers reads from the merker area. Returns \*ReadResult; use result.OK() an
 func (c *Client) ReadMulti(ctx context.Context, addrs []model.Address) ([]*ReadResult, error)
 ```
 
-ReadMulti reads several areas, packing as many as fit the negotiated PDU into one Read Var request: the request holds 12 bytes per item, the answer 4 bytes and the data of each, padded to an even length. An area whose answer does not fit one PDU is read alone, chunked as ReadArea reads it; one of size zero is not sent. It returns one result per address, in order, each as ReadArea returns it (timers and counters are addressed by element). An invalid address returns an error and reads nothing. A transport failure or the end of ctx fails the result of every address not read yet.
+ReadMulti reads several areas, packing as many as fit the negotiated PDU into one Read Var request, at most 20 items each: the request holds 12 bytes per item, the answer 4 bytes and the data of each, padded to an even length. An area whose answer does not fit one PDU is read alone, chunked as ReadArea reads it; one of size zero is not sent. It returns one result per address, in order, each as ReadArea returns it (timers and counters are addressed by element). An invalid address returns an error and reads nothing. A transport failure or the end of ctx fails the result of every address not read yet.
 
 #### func (Client) ReadOutputs
 
@@ -379,7 +379,7 @@ WriteDBBit writes DBNumber.DBXByteOffset.BitOffset using native BIT transport.
 func (c *Client) WriteMulti(ctx context.Context, items []WriteItem) ([]error, error)
 ```
 
-WriteMulti writes several areas, packing as many items as fit the negotiated PDU into one Write Var request. An item too large for one request is written alone, chunked as WriteArea writes it; one with no data is not sent. It returns one error per item, in order: nil when written, the item's return code as an error (ReturnCodeError) when the PLC refused it. An invalid item returns an error and writes nothing. A transport failure or the end of ctx returns that error, and every item not written yet carries it too.
+WriteMulti writes several areas, packing as many items as fit the negotiated PDU into one Write Var request, at most 20 items each. An item too large for one request is written alone, chunked as WriteArea writes it; one with no data is not sent. It returns one error per item, in order: nil when written, the item's return code as an error (ReturnCodeError) when the PLC refused it. An invalid item returns an error and writes nothing. A transport failure or the end of ctx returns that error, and every item not written yet carries it too.
 
 ### type CompareReadCandidate
 

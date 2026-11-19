@@ -11,13 +11,20 @@ import (
 	"github.com/otfabric/go-s7comm/wire"
 )
 
+// maxItemsPerRequest is the most items ReadMulti and WriteMulti put in one
+// Read Var or Write Var request, even when the PDU has room for more. It is
+// the limit of Snap7's multi-variable calls (MaxVars), which are used
+// against real CPUs; no recording or interop run of this module shows a CPU
+// taking more items in one job.
+const maxItemsPerRequest = 20
+
 // readItemAnswer is at most what one item takes in a Read Var answer: its
 // 4-byte header and its data with its pad byte.
 func readItemAnswer(n int) int { return 4 + n + n%2 }
 
 // ReadMulti reads several areas, packing as many as fit the negotiated PDU into
-// one Read Var request: the request holds 12 bytes per item, the answer 4 bytes
-// and the data of each, padded to an even length. An area whose answer does not
+// one Read Var request, at most 20 items each: the request holds 12 bytes per
+// item, the answer 4 bytes and the data of each, padded to an even length. An area whose answer does not
 // fit one PDU is read alone, chunked as ReadArea reads it; one of size zero is
 // not sent. It returns one result per address, in order, each as ReadArea
 // returns it (timers and counters are addressed by element). An invalid
@@ -35,6 +42,13 @@ func (c *Client) ReadMulti(ctx context.Context, addrs []model.Address) ([]*ReadR
 	out := make([]*ReadResult, len(addrs))
 	if len(addrs) == 0 {
 		return out, nil
+	}
+	// An address of size zero is not sent: its result is set before any
+	// request, so that a call that ends early leaves no result nil.
+	for i, a := range addrs {
+		if a.Size == 0 {
+			out[i] = &ReadResult{Status: ReadStatusSuccess}
+		}
 	}
 	if err := c.beginCall(ctx); err != nil {
 		failRest(out, addrs, 0, err)
@@ -78,11 +92,6 @@ func (c *Client) ReadMulti(ctx context.Context, addrs []model.Address) ([]*ReadR
 			return out, nil
 		}
 	}
-	for i, a := range addrs {
-		if out[i] == nil && a.Size == 0 {
-			out[i] = &ReadResult{Status: ReadStatusSuccess}
-		}
-	}
 	return out, nil
 }
 
@@ -107,7 +116,7 @@ func planReadGroups(addrs []model.Address, pduSize int) [][]int {
 			groups = append(groups, []int{i})
 			continue
 		}
-		if len(cur) > 0 && (req+12 > maxReq || ans+need > maxAns || len(cur) == wire.MaxReadVarItems) {
+		if len(cur) > 0 && (req+12 > maxReq || ans+need > maxAns || len(cur) == maxItemsPerRequest) {
 			groups = append(groups, cur)
 			cur, req, ans = nil, 0, 0
 		}
@@ -138,7 +147,9 @@ func (c *Client) readGroup(ctx context.Context, addrs []model.Address, g []int, 
 		return err
 	}
 	items, err := wire.ParseReadVarResponse(param, data)
-	if err == nil && len(items) != len(g) {
+	if err != nil {
+		err = protocolFailure(err)
+	} else if len(items) != len(g) {
 		err = fmt.Errorf("answer holds %d items for %d: %w", len(items), len(g), ErrProtocolFailure)
 	}
 	for k, i := range g {
@@ -183,7 +194,7 @@ type WriteItem struct {
 }
 
 // WriteMulti writes several areas, packing as many items as fit the negotiated
-// PDU into one Write Var request. An item too large for one request is written
+// PDU into one Write Var request, at most 20 items each. An item too large for one request is written
 // alone, chunked as WriteArea writes it; one with no data is not sent. It
 // returns one error per item, in order: nil when written, the item's return
 // code as an error (ReturnCodeError) when the PLC refused it. An invalid item
@@ -261,7 +272,7 @@ func planWriteGroups(items []WriteItem, pduSize int) [][]int {
 			groups = append(groups, []int{i})
 			continue
 		}
-		if len(cur) > 0 && (size+need > maxReq || len(cur) == wire.MaxReadVarItems) {
+		if len(cur) > 0 && (size+need > maxReq || len(cur) == maxItemsPerRequest) {
 			groups = append(groups, cur)
 			cur, size = nil, 0
 		}
@@ -296,7 +307,7 @@ func (c *Client) writeGroup(ctx context.Context, items []WriteItem, g []int, out
 	}
 	codes, err := wire.ParseWriteVarResponseCodes(param, data)
 	if err != nil {
-		return err
+		return protocolFailure(err)
 	}
 	if len(codes) != len(g) {
 		return fmt.Errorf("answer holds %d item codes for %d: %w", len(codes), len(g), ErrProtocolFailure)
@@ -307,11 +318,21 @@ func (c *Client) writeGroup(ctx context.Context, items []WriteItem, g []int, out
 	return nil
 }
 
+// protocolFailure wraps an answer that does not parse with ErrProtocolFailure;
+// a refusal in the answer's header (*wire.S7Error) is returned as it is.
+func protocolFailure(err error) error {
+	if isRefusal(err) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", err, ErrProtocolFailure)
+}
+
 // isRefusal reports whether a write failed because the PLC refused it: an item
-// return code or an error class in its answer. The session goes on.
+// return code or an error class in its answer. The session goes on. An
+// *wire.S7Error with neither is an answer that does not parse, not a refusal.
 func isRefusal(err error) bool {
-	var s7 *wire.S7Error
-	return errors.As(err, &s7)
+	s7, ok := errors.AsType[*wire.S7Error](err)
+	return ok && (s7.Class != 0 || s7.Code != 0)
 }
 
 // failWrites sets err on every item from index from on that has no outcome yet.

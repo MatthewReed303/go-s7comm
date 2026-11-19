@@ -627,6 +627,17 @@ var twoChunkCalls = []struct {
 	{"WriteDB", func(ctx context.Context, c *Client) (ReadStatus, error) {
 		return "", c.WriteDB(ctx, 1, 0, make([]byte, 500))
 	}},
+	{"ReadMulti", func(ctx context.Context, c *Client) (ReadStatus, error) {
+		res, err := c.ReadMulti(ctx, []model.Address{{Area: model.AreaDB, DBNumber: 1, Size: 500}})
+		if err != nil {
+			return "", err
+		}
+		return res[0].Status, res[0].Err()
+	}},
+	{"WriteMulti", func(ctx context.Context, c *Client) (ReadStatus, error) {
+		_, err := c.WriteMulti(ctx, []WriteItem{{Addr: model.Address{Area: model.AreaDB, DBNumber: 1}, Data: make([]byte, 500)}})
+		return "", err
+	}},
 }
 
 // readWritePipePeers answers every Read Var and Write Var request in full and
