@@ -7,7 +7,7 @@ What go-s7comm does not do, or does only partly. API behaviour is in [API.md](AP
 - **Classic S7comm only**, with no TLS and no password handling ([SECURITY.md](SECURITY.md)).
 - **The server is for tests**: package `server` answers only Setup Communication, Read Var and Write Var on DBs, inputs, outputs, markers, timers and counters, and DBREAD items (read only). It has no PLC program (timers and counters do not run), SZL, blocks, clock, access protection or password; those requests get error `0x8104` (service not implemented).
 - **DBREAD with a refused range**: the recordings hold only successful ranges, so how a CPU marks one refused range is not known; the server refuses the whole item.
-- **Timer and counter addresses**: the server reads the S7ANY address of a timer or counter as its element number. The recordings address only T0 and C0, which cannot tell a number from another reading; Snap7's server uses another mapping (`Start >> 1`).
+- **Timer and counter addresses**: the client sends and the server reads the S7ANY address of a timer or counter as its element number. The recordings address only T0 and C0, which cannot tell a number from another reading; Snap7's server uses another mapping (`Start >> 1`).
 - **Block download and PLC start/stop**: `wire` names these function codes, but `client` has no operation for them. Blocks can be listed, inspected and uploaded.
 - **`Discover`** is IPv4 only and rejects ranges larger than `/12`.
 
@@ -17,6 +17,7 @@ What go-s7comm does not do, or does only partly. API behaviour is in [API.md](AP
 - A call whose context ends after its request was sent, and a transport failure during a call, end the session: the client closes the connection, and later calls return `ErrNotConnected` until `Connect` succeeds again ([ERRORS.md](ERRORS.md#context-reconnect-and-concurrency)). There is no automatic reconnect.
 - `Close` ends the call in flight on the client, and a call waiting for its turn, with `ErrClosed`; it does not wait for them. A call in a pause of `WithRateLimit` returns at once too, and sends nothing more.
 - A `Logger` or `Dialer` may call `ConnectionInfo`, `PDUSize` and `Close` of the client it is set on, and must not call an operation or `Connect` of it: it runs while the client's turn is held by the call that invokes it, so such a call waits for that call and returns only when its own context ends.
+- `ReadMulti` and `WriteMulti` put at most 20 items in one request, the limit of Snap7's multi-variable calls, even when the negotiated PDU has room for more. No recording or interop run of this module shows how many items a CPU takes in one job.
 - Protocol operations are serialised per client; `RangeProbeRequest.Parallelism` gives no wire-level concurrency.
 
 ## Verification

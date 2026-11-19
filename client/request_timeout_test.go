@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"sync/atomic"
@@ -54,6 +55,29 @@ var oneRequestCalls = []struct {
 	}},
 	{"UploadBlock", func(ctx context.Context, c *Client) (ReadStatus, error) {
 		_, err := c.UploadBlock(ctx, model.BlockDB, 1)
+		return "", err
+	}},
+	{"ReadMulti", func(ctx context.Context, c *Client) (ReadStatus, error) {
+		res, err := c.ReadMulti(ctx, []model.Address{
+			{Area: model.AreaDB, DBNumber: 1, Size: 2},
+			{Area: model.AreaTimer, Start: 3, Size: 1},
+		})
+		if err != nil {
+			return "", err
+		}
+		if res[0].Status != res[1].Status {
+			return "", fmt.Errorf("statuses %s and %s differ", res[0].Status, res[1].Status)
+		}
+		return res[0].Status, res[0].Err()
+	}},
+	{"WriteMulti", func(ctx context.Context, c *Client) (ReadStatus, error) {
+		errs, err := c.WriteMulti(ctx, []WriteItem{
+			{Addr: model.Address{Area: model.AreaDB, DBNumber: 1}, Data: []byte{1, 2}},
+			{Addr: model.Address{Area: model.AreaMerkers, Start: 4}, Data: []byte{3}},
+		})
+		if err != nil && (!errors.Is(errs[0], err) || !errors.Is(errs[1], err)) {
+			return "", fmt.Errorf("item errors %v and %v, want the call's error %w", errs[0], errs[1], err)
+		}
 		return "", err
 	}},
 }

@@ -138,6 +138,14 @@ func (c *Client) WriteDB(ctx context.Context, dbNum, offset int, data []byte) er
 func (c *Client) ReadInputs(ctx context.Context, offset, size int) (*ReadResult, error)
 func (c *Client) ReadOutputs(ctx context.Context, offset, size int) (*ReadResult, error)
 func (c *Client) ReadMerkers(ctx context.Context, offset, size int) (*ReadResult, error)
+
+func (c *Client) ReadMulti(ctx context.Context, addrs []model.Address) ([]*ReadResult, error)
+func (c *Client) WriteMulti(ctx context.Context, items []WriteItem) ([]error, error)
+
+type WriteItem struct {
+    Addr model.Address
+    Data []byte
+}
 ```
 
 Behavior notes:
@@ -145,6 +153,9 @@ Behavior notes:
 - Byte read methods return `*ReadResult` and a validation `error`. Use `result.OK()` for success; `result.Err()` for a non-success read outcome; `result.Data` for the payload. Empty or short reads are never reported as success. See [ERRORS.md](ERRORS.md).
 - ReadArea chunks requests based on negotiated PDU size. A chunk answered with fewer bytes than asked ends the read, so `Data` always holds the bytes of `Start`, `Start+1`, ... up to the first gap. Status is derived from requested vs returned length (success, short-read, empty-read) or from S7 item return codes (rejected). Non-success Read Var items with transport size `0x00` (common for Snap7 address faults) are surfaced as rejected with `ReturnCode` set, not as a protocol parse failure.
 - WriteArea writes `len(data)` bytes; `addr.Size` is ignored. Large payloads are chunked, an even number of bytes per chunk, so that every chunk fits an even and an odd negotiated PDU size. Uses WriteVar with optional rate limiting. Invalid address returns `*ValidationError`.
+- On the timer and counter areas (`model.AreaTimer`, `model.AreaCounter`) `Start` is the first element's number and `Size` the number of elements; each element is two bytes of `Data`. The request uses transport size TIMER (`0x1D`) or COUNTER (`0x1C`), as a CPU requires (it refuses BYTE there). `WriteArea` there takes two bytes per element; an odd length returns `*ValidationError`. CPUs refuse timer and counter writes with an item return code.
+- `ReadMulti` packs as many addresses as fit the negotiated PDU, at most 20, into one Read Var request (12 bytes per item in the request; 4 bytes and the data, padded to even, per item in the answer). An address whose answer does not fit one PDU is read alone, chunked as `ReadArea` reads it; one of size zero is not sent. It returns one `*ReadResult` per address, in order, never nil, with `ReadArea`'s statuses. An invalid address returns `*ValidationError` and sends nothing; a transport failure or the end of `ctx` fails every result not read yet.
+- `WriteMulti` packs as many items as fit the negotiated PDU, at most 20, into one Write Var request; an item too large for one is written alone, chunked as `WriteArea` writes it; one with no data is not sent. It returns one error per item, in order: nil when written, the item return code (`*wire.S7Error`) when the PLC refused it. A non-nil second result is a failure of the call (transport, context, closed client, an answer that does not match its request: `ErrProtocolFailure`), which every item not written yet carries too ([ERRORS.md](ERRORS.md#outcome-models)).
 - `ReadBit` / `WriteBit` use native S7 BIT transport (not byte read-modify-write) and return a **strict** `error` (not `ReadResult`). `BitOffset` must be `0..7` (no wrap); invalid addresses return `*ValidationError`. `ReadDBBit` / `WriteDBBit` are DB helpers (`DB1.DBX10.3` → db=1, byte=10, bit=3).
 
 ### Range scan API
@@ -658,6 +669,10 @@ func EncodeS7Any(addr S7AnyAddress) ([]byte, error)
 func EncodeReadVarRequest(pduRef uint16, addrs []S7AnyAddress) ([]byte, error)
 func ParseReadVarResponse(param, data []byte) ([]ReadVarItem, error)
 func EncodeWriteVarRequest(pduRef uint16, addr S7AnyAddress, value []byte) ([]byte, error)
+func EncodeWriteVarItemsRequest(pduRef uint16, items []WriteVarItem) ([]byte, error)
+func WriteVarItemSize(valueLen int) int                          // at most what one item adds to a Write Var request
+func IsElementArea(area byte) bool                               // timers and counters: addressed by element
+const ElementAreaBytes = 2
 func ParseWriteVarResponse(param, data []byte) error             // nil only when every item succeeded
 func ParseWriteVarResponseCodes(param, data []byte) ([]byte, error) // one return code per item
 
@@ -698,7 +713,7 @@ func EncodeEndUploadRequest(pduRef uint16, uploadID uint32) []byte
 func ParseUploadResponse(param, data []byte) (*UploadChunk, error) // status 0x01: more data; length in bytes
 ```
 
-`EncodeS7Any` / byte read-write helpers use byte transport size and byte offsets (start address = `Start*8` bits). Bit helpers (`EncodeS7AnyBit`, `EncodeReadVarBitRequest`, `EncodeWriteVarBitRequest`, `DecodeAsBit`) use request S7ANY transport `TransportSizeBit` (`0x01`) with start = `ByteOffset*8+BitOffset` (not multiplied again). Read/Write Var data sections use `DataTransportSizeBit` (`0x03`). Only `SyntaxIDS7Any` is supported for encoding (`ValidateRequestSyntax`).
+`EncodeS7Any` / byte read-write helpers use byte transport size and byte offsets (start address = `Start*8` bits), except on the timer and counter areas: there the transport size is TIMER or COUNTER, `Start` the element number (not multiplied) and `Size` the element count, and a Write Var item's data is an OCTET STRING (`0x09`, length in bytes). `EncodeWriteVarItemsRequest` (`WriteVarItem{Addr, Value}`) encodes several items in one request, every value but the last padded to even. Bit helpers (`EncodeS7AnyBit`, `EncodeReadVarBitRequest`, `EncodeWriteVarBitRequest`, `DecodeAsBit`) use request S7ANY transport `TransportSizeBit` (`0x01`) with start = `ByteOffset*8+BitOffset` (not multiplied again). Read/Write Var data sections use `DataTransportSizeBit` (`0x03`). Only `SyntaxIDS7Any` is supported for encoding (`ValidateRequestSyntax`).
 
 Request encoders return `ErrOutOfRange` for a value that does not fit its wire field (a DB number above 65535, a start past `MaxS7AnyByteOffset`, more than 255 items, a write over 8191 bytes, a length above 65535) instead of truncating it to another address.
 

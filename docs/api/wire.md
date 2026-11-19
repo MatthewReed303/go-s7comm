@@ -206,6 +206,12 @@ const DataTransportSizeNull = 0x00
 DataTransportSizeNull is the data transport size of an item without data (a refused item).
 
 ```go
+const ElementAreaBytes = 2
+```
+
+ElementAreaBytes is the size of one timer or counter.
+
+```go
 const MaxUploadBlockNumber = 99999
 ```
 
@@ -404,7 +410,7 @@ EncodeReadVarResponse builds the Ack-Data answer to Read Var. At most MaxReadVar
 func EncodeS7Any(addr S7AnyAddress) ([]byte, error)
 ```
 
-EncodeS7Any encodes an S7Any address specification (syntax SyntaxIDS7Any only). Call ValidateArea(addr.Area) before encoding if area comes from untrusted input. Byte-oriented: Start is a byte offset; Size is a byte count; transport size is BYTE. A field that does not fit returns ErrOutOfRange (ValidateS7AnyAddress).
+EncodeS7Any encodes an S7Any address specification (syntax SyntaxIDS7Any only). Call ValidateArea(addr.Area) before encoding if area comes from untrusted input. Byte-oriented: Start is a byte offset; Size is a byte count; transport size is BYTE. On the timer and counter areas Start is the first element's number and Size the number of elements (two bytes each), with transport size TIMER or COUNTER: a CPU refuses BYTE there. A field that does not fit returns ErrOutOfRange (ValidateS7AnyAddress).
 
 ### func EncodeS7AnyBit
 
@@ -486,6 +492,14 @@ func EncodeWriteVarBitRequest(pduRef uint16, addr S7AnyBitAddress, value bool) (
 
 EncodeWriteVarBitRequest creates a Write Var request for one bit using native BIT data transport. Data section: reserved 0x00, transport BIT (0x03), length 1 bit, payload 0x00/0x01.
 
+### func EncodeWriteVarItemsRequest
+
+```go
+func EncodeWriteVarItemsRequest(pduRef uint16, items []WriteVarItem) ([]byte, error)
+```
+
+EncodeWriteVarItemsRequest creates one Write Var request for several items. Each value is sent as BYTE/WORD/DWORD data with its length in bits, or on the timer and counter areas as an OCTET STRING with its length in bytes. Every value but the last is padded to an even length. No items, more than MaxReadVarItems, a value longer than MaxWriteVarBytes or an address ValidateS7AnyAddress rejects returns ErrOutOfRange.
+
 ### func EncodeWriteVarRequest
 
 ```go
@@ -525,6 +539,14 @@ func HeaderErrorString(class, code byte) string
 ```
 
 HeaderErrorString returns a human-readable string for S7 header error class/code. Preserves raw values in S7Error; this is for display only.
+
+### func IsElementArea
+
+```go
+func IsElementArea(area byte) bool
+```
+
+IsElementArea reports whether an area is addressed by element, not by byte: the timers and the counters. Their transport size is the area code itself (TIMER 0x1D, COUNTER 0x1C); one element is ElementAreaBytes bytes.
 
 ### func ItemReturnCodeString
 
@@ -669,6 +691,14 @@ func ValidateS7AnyBitAddress(addr S7AnyBitAddress) error
 ```
 
 ValidateS7AnyBitAddress is ValidateS7AnyAddress for a one-bit address; BitOffset must be 0..7.
+
+### func WriteVarItemSize
+
+```go
+func WriteVarItemSize(valueLen int) int
+```
+
+WriteVarItemSize is at most what one item adds to a Write Var request: its 12-byte address, its 4-byte data header and its value with its pad byte.
 
 ## Types
 
@@ -1166,3 +1196,14 @@ type WriteVarData struct {
 ```
 
 WriteVarData is one data item of a Write Var job.
+
+### type WriteVarItem
+
+```go
+type WriteVarItem struct {
+	Addr  S7AnyAddress
+	Value []byte
+}
+```
+
+WriteVarItem is one item of a Write Var request: where, and the bytes to write there (two per element on the timer and counter areas).

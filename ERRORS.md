@@ -61,6 +61,11 @@ Three patterns appear across the public API:
 3. **Best-effort** — `Identify`, `GetBlockInfo`, `ListAllBlocks`, `ReadDiagBuffer`  
    May return a partial value together with a non-nil `error`. Use both.
 
+4. **Several items** — `ReadMulti`, `WriteMulti`  
+   - `ReadMulti` returns one `*ReadResult` per address, in order, never nil, each with the statuses of a structured read; its top-level `error` is input validation only (`*ValidationError`, nothing sent). A transport failure or the end of `ctx` fails the result of the addresses of the request in flight and of every address after it; the results before keep their data.
+   - `WriteMulti` returns one `error` per item, in order, and an `error` for the call. Per item: nil when written, the item return code as `*wire.S7Error` when the PLC refused it. A non-nil call error (transport, `ctx`, `ErrClosed`, `ErrNotConnected`, an answer that wraps `ErrProtocolFailure`, a job refused in the answer's header as `*wire.S7Error` with its class) is also the error of the items of the request in flight and of every item after it; items written before keep nil. An invalid item returns `*ValidationError` as the call error and a nil slice, and nothing is sent.
+   - An answer that does not match its request (another item count, an item longer than asked, an answer that does not parse) wraps `ErrProtocolFailure`, and the session stays open. A job refused in the answer's header is a refusal, not a protocol failure.
+
 Connectionless helpers (`Discover`, `ProbeRackSlots`, `CompareRead`) create their own sessions and return their own result types; failures are mostly top-level `error` or per-candidate statuses (see [API.md](API.md)).
 
 ## Structured reads (`ReadResult`)
