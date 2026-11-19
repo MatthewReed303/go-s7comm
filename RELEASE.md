@@ -1,5 +1,28 @@
 # go-s7comm Releases
 
+## v0.19.0
+
+**Date:** 2026-11-19
+**Previous release:** v0.18.0
+
+Minor release. Two `server.Config` fields and one type are added; no exported identifier is removed or changed, and a server without the new fields answers as before.
+
+### Added
+
+- **`server.Config.CheckRead`**: asked for each read item, and each range of a DBREAD item, that addresses a registered area within its bounds; a code other than `0xFF` is answered instead of the data. A host serving values it does not hold as good (a source that is down) refuses the item with the code it chooses.
+- **`server.Config.OnWrite`**: asked for each write item the server would apply, with no lock held and a context that `Close` ends; `0xFF` applies the item, any other code is the item's answer and the area is unchanged. A host forwards a client's write to its own source this way.
+- **`server.Item`**: the item as the hooks see it: the client's address, area, DB number, first byte, size and bit.
+
+### Documentation
+
+- API.md (`server` config and Write Var row), ARCHITECTURE.md (locking with `OnWrite`), LIMITATIONS.md, docs/FEATURE-STATUS.md.
+
+### Tests
+
+- `server/hooks_test.go` with this module's client: an accepted and a refused byte write, a bit write, items the server refuses never offered, a multi-item job offered in order with one item refused, `Close` ending a hook's context, refused read items in single and multi-item reads; `server/hooks_internal_test.go`: DBREAD ranges asked one by one, one refused range refusing the item.
+
+---
+
 ## v0.18.0
 
 **Date:** 2026-11-19

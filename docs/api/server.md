@@ -122,16 +122,56 @@ type Config struct {
 	IdleTimeout time.Duration
 	// Logger receives connection and request diagnostics. Nil discards them.
 	Logger *slog.Logger
+	// CheckRead, when set, is asked for each read item that addresses a
+	// registered area within its bounds (each range of a DBREAD item),
+	// before its bytes are answered: a code other than wire.RetCodeSuccess
+	// is the item's answer instead of the data (a DBREAD item takes the
+	// first refused range's code). It runs while the areas are locked for
+	// reading: it must return quickly and must not call Read or Write.
+	CheckRead func(it Item) byte
+	// OnWrite, when set, is asked for each write item the server would
+	// apply (a registered, writable area, within its bounds, data of the
+	// addressed size), with no lock held: wire.RetCodeSuccess applies the
+	// item; any other code is the item's answer and the area is left as it
+	// was. data is the item's bytes as the client sent them (for a bit
+	// item one byte, the bit in bit 0). The client waits for the job's
+	// answer while it runs; ctx ends when the server is closed. The items of
+	// a job are asked in their order, each applied before the next is
+	// asked, so with OnWrite set a job does not change memory as one step.
+	OnWrite func(ctx context.Context, it Item, data []byte) byte
 }
 ```
 
 Config configures a Server. The zero value is valid.
 
+### type Item
+
+```go
+type Item struct {
+	// Client is the remote address of the connection the job came on.
+	Client net.Addr
+	Area   Area
+	// DB is the data block number on AreaDB and 0 elsewhere.
+	DB int
+	// Start is the first byte addressed; on timers and counters 2n for
+	// element n.
+	Start int
+	// Size is the number of bytes addressed: 1 for a bit item.
+	Size int
+	// Bit is the bit (0..7) of a bit item, -1 for any other item.
+	Bit int
+}
+```
+
+Item is one item of a client's job on a registered area, as Config.CheckRead and Config.OnWrite are asked about it.
+
 ### type Server
 
 ```go
 type Server struct {
-	// contains filtered or unexported fields
+
+	// hooks is the context Config.OnWrite runs with; Close ends it.
+
 }
 ```
 
