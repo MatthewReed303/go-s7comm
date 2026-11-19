@@ -55,7 +55,9 @@ type Config struct {
 	// addressed size), with no lock held: wire.RetCodeSuccess applies the
 	// item; any other code is the item's answer and the area is left as it
 	// was. data is the item's bytes as the client sent them (for a bit
-	// item one byte, the bit in bit 0). The client waits for the job's
+	// item one byte, the bit in bit 0), a copy the hook may change: what it
+	// leaves there is applied (a host whose source took another value than
+	// the client sent). The client waits for the job's
 	// answer while it runs; ctx ends when the server is closed. The items of
 	// a job are asked in their order, each applied before the next is
 	// asked, so with OnWrite set a job does not change memory as one step.

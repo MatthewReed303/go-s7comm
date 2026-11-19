@@ -90,6 +90,18 @@ func TestOnWriteAppliesWhatItAccepts(t *testing.T) {
 	}
 }
 
+func TestOnWriteMayChangeTheDataItApplies(t *testing.T) {
+	srv := newServer(t, server.Config{OnWrite: func(_ context.Context, _ server.Item, data []byte) byte {
+		data[1] = 0x42
+		return wire.RetCodeSuccess
+	}})
+	c := dial(t, start(t, srv))
+	must(t, c.WriteDB(context.Background(), 1, 30, []byte{1, 2}))
+	if b, _ := srv.Read(server.AreaDB, 1, 30, 2); !bytes.Equal(b, []byte{1, 0x42}) {
+		t.Errorf("DB1 = %v, want the hook's bytes", b)
+	}
+}
+
 func TestOnWriteIsNotAskedForRefusedItems(t *testing.T) {
 	var got seen
 	srv := newServer(t, server.Config{OnWrite: func(_ context.Context, it server.Item, data []byte) byte {

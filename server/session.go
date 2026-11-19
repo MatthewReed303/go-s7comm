@@ -344,12 +344,13 @@ func (s *session) write(ref uint16, param, data []byte) ([]byte, error) {
 		s.srv.mem.mu.RLock()
 		t, code := s.writable(spec, items[i])
 		s.srv.mem.mu.RUnlock()
+		data := append([]byte(nil), items[i].Data...)
 		if code == wire.RetCodeSuccess {
-			code = s.srv.cfg.OnWrite(s.srv.hooks, s.item(t), append([]byte(nil), items[i].Data...))
+			code = s.srv.cfg.OnWrite(s.srv.hooks, s.item(t), data)
 		}
 		if code == wire.RetCodeSuccess {
 			s.srv.mem.mu.Lock()
-			apply(t, items[i].Data)
+			apply(t, data)
 			s.srv.mem.mu.Unlock()
 		}
 		codes[i] = code

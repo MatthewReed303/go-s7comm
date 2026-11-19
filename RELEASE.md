@@ -10,7 +10,7 @@ Minor release. Two `server.Config` fields and one type are added; no exported id
 ### Added
 
 - **`server.Config.CheckRead`**: asked for each read item, and each range of a DBREAD item, that addresses a registered area within its bounds; a code other than `0xFF` is answered instead of the data. A host serving values it does not hold as good (a source that is down) refuses the item with the code it chooses.
-- **`server.Config.OnWrite`**: asked for each write item the server would apply, with no lock held and a context that `Close` ends; `0xFF` applies the item, any other code is the item's answer and the area is unchanged. A host forwards a client's write to its own source this way.
+- **`server.Config.OnWrite`**: asked for each write item the server would apply, with no lock held and a context that `Close` ends; `0xFF` applies the item's data, which the hook may change first (the value its source took), any other code is the item's answer and the area is unchanged. A host forwards a client's write to its own source this way.
 - **`server.Item`**: the item as the hooks see it: the client's address, area, DB number, first byte, size and bit.
 
 ### Documentation
@@ -19,7 +19,7 @@ Minor release. Two `server.Config` fields and one type are added; no exported id
 
 ### Tests
 
-- `server/hooks_test.go` with this module's client: an accepted and a refused byte write, a bit write, items the server refuses never offered, a multi-item job offered in order with one item refused, `Close` ending a hook's context, refused read items in single and multi-item reads; `server/hooks_internal_test.go`: DBREAD ranges asked one by one, one refused range refusing the item.
+- `server/hooks_test.go` with this module's client: an accepted and a refused byte write, a bit write, a hook changing the data it accepts, items the server refuses never offered, a multi-item job offered in order with one item refused, `Close` ending a hook's context, refused read items in single and multi-item reads; `server/hooks_internal_test.go`: DBREAD ranges asked one by one, one refused range refusing the item.
 
 ---
 
