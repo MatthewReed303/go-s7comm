@@ -127,7 +127,8 @@ type Config struct {
 	// before its bytes are answered: a code other than wire.RetCodeSuccess
 	// is the item's answer instead of the data (a DBREAD item takes the
 	// first refused range's code). It runs while the areas are locked for
-	// reading: it must return quickly and must not call Read or Write.
+	// reading: it must return quickly and must not call Read, Write or
+	// Close of the server.
 	CheckRead func(it Item) byte
 	// OnWrite, when set, is asked for each write item the server would
 	// apply (a registered, writable area, within its bounds, data of the
@@ -140,6 +141,13 @@ type Config struct {
 	// answer while it runs; ctx ends when the server is closed. The items of
 	// a job are asked in their order, each applied before the next is
 	// asked, so with OnWrite set a job does not change memory as one step.
+	// It may call Read and Write of the server. Close waits for the
+	// connection that runs it, so a hook that stops the server calls
+	// go Close(): Close ends ctx and completes once the hook returns. A hook
+	// that ignores ctx holds Close until it returns.
+	//
+	// The hooks run on the connection's goroutine and are not recovered: a
+	// hook that panics ends the program.
 	OnWrite func(ctx context.Context, it Item, data []byte) byte
 }
 ```
@@ -193,7 +201,7 @@ New returns a Server with no areas registered.
 func (s *Server) Close() error
 ```
 
-Close stops all listeners and closes every connection, then waits for their goroutines: when it returns, no goroutine of an accepted connection is running or still to start. Close is safe to call more than once and from multiple goroutines; every call waits and returns nil.
+Close stops all listeners and closes every connection, then waits for their goroutines: when it returns, no goroutine of an accepted connection is running or still to start. Close is safe to call more than once and from multiple goroutines; every call waits and returns nil. It ends the context of Config.OnWrite and waits for a hook in progress: a hook calls go Close(), not Close.
 
 #### func (Server) ListenAndServe
 

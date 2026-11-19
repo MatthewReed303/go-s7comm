@@ -799,7 +799,7 @@ type Config struct {
     IdleTimeout      time.Duration // close a connection with no request, or that takes no answer, for this long; 0 = none
     Logger           *slog.Logger  // nil = silent
     CheckRead        func(it Item) byte                                        // nil = none; asked per read item / DBREAD range on a registered area, under the read lock; not RetCodeSuccess = that code instead of the data
-    OnWrite          func(ctx context.Context, it Item, data []byte) byte     // nil = none; asked per write item the server would apply, no lock held; RetCodeSuccess applies data (which it may change), another code is the item's answer; ctx ends at Close
+    OnWrite          func(ctx context.Context, it Item, data []byte) byte     // nil = none; asked per write item the server would apply, no lock held; RetCodeSuccess applies data (which it may change), another code is the item's answer; ctx ends at Close; may call Read/Write; stop the server with go Close(); not recovered
 }
 type Item struct {
     Client net.Addr // the connection's remote address
